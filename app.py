@@ -4,7 +4,7 @@ import numpy as np
 from datetime import date
 
 import gspread
-from google.oauth2 import service_account  # For service_account.Credentials
+from google.oauth2 import service_account
 
 ############################
 # 1. GOOGLE SHEETS HELPERS
@@ -76,7 +76,7 @@ def delete_lease_in_gsheet(lease_name, sheet_name="LeaseData"):
     try:
         client = get_gsheet_connection()
         sheet = client.open(sheet_name).sheet1
-        records = sheet.get_all_records()  # Each element is a dict
+        records = sheet.get_all_records()
         
         # Row 1 is headers, so data starts at row 2
         for i, row in enumerate(records, start=2):
@@ -259,7 +259,69 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
     return pd.DataFrame(entries)
 
 ############################
-# 5. STREAMLIT APP
+# 5. STANDARD LEASE ACCOUNTING REPORTS
+############################
+def generate_liability_rollforward(schedule_df):
+    """
+    Creates a rollforward showing beginning liability, interest, principal,
+    payment, and ending liability each period.
+    """
+    rows = []
+    if not schedule_df.empty:
+        # The 'beginning' balance for Period 1 is the first row's ending + principal
+        # because at the time we create the schedule, "Lease_Liability_Balance" is after that period's payment.
+        # So we do a small trick to get the prior balance for the first row:
+        first_ending = schedule_df["Lease_Liability_Balance"].iloc[0]
+        first_principal = schedule_df["Principal"].iloc[0]
+        prior_balance = first_ending + first_principal
+        
+        for i, row in schedule_df.iterrows():
+            beginning_balance = prior_balance
+            payment = row["Payment"]
+            interest = row["Interest_Expense"]
+            principal = row["Principal"]
+            ending_balance = row["Lease_Liability_Balance"]
+            
+            rows.append({
+                "Period": row["Period"],
+                "Date": row["Date"].strftime("%Y-%m-%d"),
+                "Beginning Liability": beginning_balance,
+                "Interest": interest,
+                "Principal": principal,
+                "Payment": payment,
+                "Ending Liability": ending_balance
+            })
+            prior_balance = ending_balance
+    return pd.DataFrame(rows)
+
+def generate_rou_asset_rollforward(schedule_df):
+    """
+    Creates a rollforward showing beginning ROU asset, amortization,
+    and ending balance each period.
+    """
+    rows = []
+    if not schedule_df.empty:
+        first_ending = schedule_df["ROU_Asset_Balance"].iloc[0]
+        first_amort = schedule_df["ROU_Asset_Amortization"].iloc[0]
+        prior_rou = first_ending + first_amort
+        
+        for i, row in schedule_df.iterrows():
+            beginning_rou = prior_rou
+            amort = row["ROU_Asset_Amortization"]
+            ending_rou = row["ROU_Asset_Balance"]
+            
+            rows.append({
+                "Period": row["Period"],
+                "Date": row["Date"].strftime("%Y-%m-%d"),
+                "Beginning ROU Asset": beginning_rou,
+                "Amortization": amort,
+                "Ending ROU Asset": ending_rou
+            })
+            prior_rou = ending_rou
+    return pd.DataFrame(rows)
+
+############################
+# 6. STREAMLIT APP
 ############################
 def main():
     st.title("ASC 842 LEASE MODULE")
@@ -283,7 +345,7 @@ def main():
                                                     value=5.0)
     payment_timing = st.sidebar.selectbox("Payment Timing", ["end", "begin"])
     
-    # 1) Generate & Save (Append)
+    # --- Generate & Save (Append) ---
     if st.sidebar.button("Generate & Save Lease Schedule"):
         df_schedule = generate_amortization_schedule(
             lease_term=lease_term,
@@ -307,7 +369,7 @@ def main():
         
         st.success(f"Lease schedule for '{lease_name}' generated and saved!")
         
-        # Refresh the local store from GSheets to remain in sync
+        # Refresh local store from GSheets so everything is in sync
         st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
     
     st.write("---")
@@ -318,9 +380,11 @@ def main():
         selected_lease = st.selectbox("Select a saved lease to view:", options=saved_lease_names)
         
         if selected_lease:
-            # Display the schedule
-            st.subheader(f"Lease Amortization Schedule: {selected_lease}")
+            # Retrieve the existing schedule & journal
             df_schedule = st.session_state["saved_leases"][selected_lease]["schedule"]
+            df_journal = st.session_state["saved_leases"][selected_lease]["journal"]
+            
+            st.subheader(f"Lease Amortization Schedule: {selected_lease}")
             st.dataframe(
                 df_schedule.style.format({
                     "Payment": "{:,.2f}",
@@ -331,7 +395,6 @@ def main():
                     "ROU_Asset_Balance": "{:,.2f}",
                 })
             )
-            
             # Download: schedule
             csv_schedule = df_schedule.to_csv(index=False).encode('utf-8')
             st.download_button(
@@ -341,13 +404,10 @@ def main():
                 mime="text/csv"
             )
             
-            # Display the journal
             st.subheader(f"Monthly Journal Entries: {selected_lease}")
-            df_journal = st.session_state["saved_leases"][selected_lease]["journal"]
             st.dataframe(
                 df_journal.style.format({"Debit": "{:,.2f}", "Credit": "{:,.2f}"})
             )
-            
             # Download: journal
             csv_journal = df_journal.to_csv(index=False).encode('utf-8')
             st.download_button(
@@ -357,8 +417,53 @@ def main():
                 mime="text/csv"
             )
             
+            # --- Standard Reports ---
             st.write("---")
-            # Delete or Overwrite
+            st.header("Standard Lease Accounting Reports")
+            
+            # Generate & Display Lease Liability Rollforward
+            df_liab = generate_liability_rollforward(df_schedule)
+            st.subheader("Lease Liability Rollforward")
+            st.dataframe(
+                df_liab.style.format({
+                    "Beginning Liability": "{:,.2f}",
+                    "Interest": "{:,.2f}",
+                    "Principal": "{:,.2f}",
+                    "Payment": "{:,.2f}",
+                    "Ending Liability": "{:,.2f}"
+                })
+            )
+            # Download: liability rollforward
+            csv_liab = df_liab.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download Liability Rollforward (CSV)",
+                data=csv_liab,
+                file_name=f"{selected_lease}_liability_rollforward.csv",
+                mime="text/csv"
+            )
+            
+            # Generate & Display ROU Asset Rollforward
+            df_rou = generate_rou_asset_rollforward(df_schedule)
+            st.subheader("ROU Asset Rollforward")
+            st.dataframe(
+                df_rou.style.format({
+                    "Beginning ROU Asset": "{:,.2f}",
+                    "Amortization": "{:,.2f}",
+                    "Ending ROU Asset": "{:,.2f}"
+                })
+            )
+            # Download: ROU asset rollforward
+            csv_rou = df_rou.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download ROU Asset Rollforward (CSV)",
+                data=csv_rou,
+                file_name=f"{selected_lease}_rou_asset_rollforward.csv",
+                mime="text/csv"
+            )
+            
+            # --- Delete or Overwrite Buttons ---
+            st.write("---")
+            st.subheader("Manage This Lease Record")
             col1, col2 = st.columns([1,1])
             with col1:
                 if st.button("Delete Lease"):
@@ -368,7 +473,7 @@ def main():
                     del st.session_state["saved_leases"][selected_lease]
                     st.success(f"Deleted lease '{selected_lease}'!")
                     
-                    # Reload from GSheets to see the updated list
+                    # Reload so we see updated list
                     st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
             
             with col2:
@@ -396,7 +501,7 @@ def main():
                     
                     st.success(f"Lease '{selected_lease}' updated with current sidebar inputs!")
                     
-                    # Reload so we see changes
+                    # Reload so we see new changes
                     st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
 
     else:
