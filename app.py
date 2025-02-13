@@ -2,28 +2,26 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import date
+
 import gspread
-from google.oauth2 import service_account
-import streamlit as st
+from google.oauth2 import service_account  # <--- Correct import for service_account.Credentials
 
 ############################
-# 2. Load Leases from Google Sheets
+# 1. GOOGLE SHEETS HELPERS
 ############################
 def get_gsheet_connection():
     """
     Creates and returns a gspread client authenticated via
     service_account credentials stored in Streamlit Secrets.
     """
-    # Read the service account info from st.secrets
+    # Load service account info from st.secrets
     creds_dict = st.secrets["gcp_service_account"]
     
-    # Build credentials using the dictionary
+    # Build credentials using the dictionary (no more 'Credentials' undefined!)
     creds = service_account.Credentials.from_service_account_info(
         creds_dict,
-        scopes=[
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
+        scopes=["https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"]
     )
     
     # Authorize gspread with these credentials
@@ -32,16 +30,16 @@ def get_gsheet_connection():
 
 def load_leases_from_gsheet(sheet_name="LeaseData"):
     """
-    Reads existing rows from a Google Sheets tab and reconstructs 
-    your saved lease data (amortization schedule + journal) if present.
+    Reads existing rows from a Google Sheets tab and reconstructs
+    saved lease data (amortization schedule + journal).
     """
     try:
         client = get_gsheet_connection()
         sheet = client.open(sheet_name).sheet1  # Opens the first worksheet
-        data = sheet.get_all_records()
-        
+        data = sheet.get_all_records()  # Returns a list of dicts
+
         df = pd.DataFrame(data)
-        # Expecting columns like ["LeaseName", "SerializedSchedule", "SerializedJournal"]
+        # Expecting columns: ["LeaseName", "SerializedSchedule", "SerializedJournal"]
         
         saved_leases = {}
         for _, row in df.iterrows():
@@ -53,47 +51,39 @@ def load_leases_from_gsheet(sheet_name="LeaseData"):
                 "schedule": schedule_df,
                 "journal": journal_df
             }
-        
         return saved_leases
     except Exception as e:
         st.warning(f"Unable to load from Google Sheets: {e}")
         return {}
 
-############################
-# 3. Save Leases to Google Sheets
-############################
 def save_lease_to_gsheet(lease_name, schedule_df, journal_df, sheet_name="LeaseData"):
     """
     Appends a new row with the lease data to Google Sheets.
-    You might later replace this with an "upsert" if you need
-    to update existing rows for a given lease name.
+    (Currently appends; could be changed to 'upsert' if you need updates.)
     """
     try:
         client = get_gsheet_connection()
         sheet = client.open(sheet_name).sheet1
         
-        # Convert DataFrames to JSON strings (or CSV) for storage
+        # Convert DataFrames to JSON strings for storage
         schedule_json = schedule_df.to_json()
         journal_json = journal_df.to_json()
         
-        # Append a row: [LeaseName, JSON_Schedule, JSON_Journal]
         new_row = [lease_name, schedule_json, journal_json]
         sheet.append_row(new_row, value_input_option="USER_ENTERED")
     except Exception as e:
         st.warning(f"Unable to save to Google Sheets: {e}")
 
-
-
 ############################
-# 1. HELPER FUNCTIONS (same as yours)
+# 2. HELPER FUNCTIONS
 ############################
 def generate_monthly_payments(base_payment, lease_term, annual_escalation_rate, payment_timing="end"):
-    monthly_payments = []
+    payments = []
     for month in range(1, lease_term + 1):
         years_elapsed = (month - 1) // 12
         payment_for_month = base_payment * (1 + annual_escalation_rate) ** years_elapsed
-        monthly_payments.append(payment_for_month)
-    return monthly_payments
+        payments.append(payment_for_month)
+    return payments
 
 def present_value_of_varied_payments(payments, monthly_rate, payment_timing="end"):
     pv = 0.0
@@ -105,7 +95,7 @@ def present_value_of_varied_payments(payments, monthly_rate, payment_timing="end
     return pv
 
 ############################
-# 2. MAIN AMORTIZATION FUNCTION (same as yours)
+# 3. MAIN AMORTIZATION FUNCTION
 ############################
 def generate_amortization_schedule(
     lease_term,
@@ -116,9 +106,7 @@ def generate_amortization_schedule(
     payment_timing="end",
     lease_type="Operating"
 ):
-    monthly_payments = generate_monthly_payments(
-        base_payment, lease_term, annual_escalation_rate, payment_timing
-    )
+    monthly_payments = generate_monthly_payments(base_payment, lease_term, annual_escalation_rate, payment_timing)
     
     monthly_rate = annual_discount_rate / 12.0
     lease_liability = present_value_of_varied_payments(monthly_payments, monthly_rate, payment_timing)
@@ -164,7 +152,7 @@ def generate_amortization_schedule(
     return pd.DataFrame(schedule_rows)
 
 ############################
-# 3. JOURNAL ENTRY CREATION (same as yours)
+# 4. JOURNAL ENTRY CREATION
 ############################
 def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
     entries = []
@@ -245,75 +233,7 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
                     "Debit": 0.0,
                     "Credit": round(rou_amort, 2)
                 })
-    
     return pd.DataFrame(entries)
-
-############################
-# 4. GOOGLE SHEETS HELPER
-############################
-def get_gsheet_connection():
-    # 1) Put your credentials JSON file in a secure place (or store in st.secrets)
-    # 2) Reference that location below, or build Credentials object from st.secrets
-    # Example using a credentials file "my_creds.json" in the current directory:
-    creds = Credentials.from_service_account_file("my_creds.json", scopes=[
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ])
-    client = gspread.authorize(creds)
-    return client
-
-def load_leases_from_gsheet(sheet_name="LeaseData"):
-    """
-    Reads existing rows from a tab in Google Sheets and reconstructs the 
-    saved lease data (amortization schedule + journal) if present.
-    In reality, you might store each lease row separately or store just 
-    summary data. This is a simplistic approach.
-    """
-    try:
-        client = get_gsheet_connection()
-        sheet = client.open(sheet_name).sheet1  # open first worksheet
-        data = sheet.get_all_records()
-        
-        # Convert to DataFrame for easier manipulation
-        df = pd.DataFrame(data)
-        
-        # Example assumption:
-        # We have columns like ["LeaseName", "SerializedSchedule", "SerializedJournal"]
-        
-        saved_leases = {}
-        for _, row in df.iterrows():
-            lease_name = row["LeaseName"]
-            # If you stored schedule/journal as JSON strings, un-serialize them
-            schedule_df = pd.read_json(row["SerializedSchedule"])
-            journal_df = pd.read_json(row["SerializedJournal"])
-            saved_leases[lease_name] = {
-                "schedule": schedule_df,
-                "journal": journal_df
-            }
-            
-        return saved_leases
-    except Exception as e:
-        st.warning(f"Unable to load from Google Sheets: {e}")
-        return {}
-
-def save_lease_to_gsheet(lease_name, schedule_df, journal_df, sheet_name="LeaseData"):
-    """
-    Appends a new row with the lease data. A more advanced approach would 
-    upsert rows instead of always appending.
-    """
-    try:
-        client = get_gsheet_connection()
-        sheet = client.open(sheet_name).sheet1
-        
-        # Convert DataFrames to JSON strings or CSV
-        schedule_json = schedule_df.to_json()
-        journal_json = journal_df.to_json()
-        
-        new_row = [lease_name, schedule_json, journal_json]
-        # Append a new row at the bottom
-        sheet.append_row(new_row, value_input_option="USER_ENTERED")
-    except Exception as e:
-        st.warning(f"Unable to save to Google Sheets: {e}")
 
 ############################
 # 5. STREAMLIT APP
@@ -321,9 +241,8 @@ def save_lease_to_gsheet(lease_name, schedule_df, journal_df, sheet_name="LeaseD
 def main():
     st.title("ASC 842 LEASE MODULE")
     
-    # 1) Initialize session state
+    # Load existing leases from Google Sheets on first run
     if "saved_leases" not in st.session_state:
-        # Attempt to load from Google Sheets on first run
         st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
     
     st.sidebar.header("Lease Inputs")
@@ -341,7 +260,7 @@ def main():
                                                     value=5.0)
     payment_timing = st.sidebar.selectbox("Payment Timing", ["end", "begin"])
     
-    # 2) Generate schedule, save to session and Google Sheets
+    # Generate & Save button
     if st.sidebar.button("Generate & Save Lease Schedule"):
         df_schedule = generate_amortization_schedule(
             lease_term=lease_term,
@@ -354,18 +273,17 @@ def main():
         )
         df_journal = generate_monthly_journal_entries(df_schedule, lease_type=lease_type)
         
-        # Save in session state
+        # Save in session
         st.session_state["saved_leases"][lease_name] = {
             "schedule": df_schedule,
             "journal": df_journal
         }
         
-        # Also persist to Google Sheets
+        # Save to Google Sheets
         save_lease_to_gsheet(lease_name, df_schedule, df_journal, sheet_name="LeaseData")
         
         st.success(f"Lease schedule for '{lease_name}' generated and saved!")
     
-    # 3) Display all saved leases
     st.write("---")
     st.header("View Saved Lease")
     
@@ -387,6 +305,7 @@ def main():
                 })
             )
             
+            # Download link for schedule
             csv_schedule = df_schedule.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="Download Amortization Schedule (CSV)",
@@ -401,6 +320,7 @@ def main():
                 df_journal.style.format({"Debit": "{:,.2f}", "Credit": "{:,.2f}"})
             )
             
+            # Download link for journal
             csv_journal = df_journal.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="Download Journal Entries (CSV)",
@@ -413,3 +333,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
