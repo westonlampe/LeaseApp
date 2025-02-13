@@ -229,7 +229,7 @@ def main():
         st.success(f"Lease schedule for '{lease_name}' generated and saved!")
 
     st.write("---")
-    st.header("View Saved Lease")
+    st.header("View Lease Record")
     
     # Let the user pick from existing saved leases
     saved_lease_names = list(st.session_state["saved_leases"].keys())
