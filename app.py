@@ -230,7 +230,7 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
 # 4. STREAMLIT APP
 ############################
 def main():
-    st.title("ASC 842 LEASE ACCOUNTING MODULE")
+    st.title("ASC 842 LEASE MODULE")
     
     st.sidebar.header("Lease Inputs")
     lease_type = st.sidebar.selectbox("Lease Classification", ["Operating", "Finance"])
