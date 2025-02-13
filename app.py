@@ -234,7 +234,7 @@ def main():
     # Let the user pick from existing saved leases
     saved_lease_names = list(st.session_state["saved_leases"].keys())
     if saved_lease_names:
-        selected_lease = st.selectbox("Select a saved lease to view:",
+        selected_lease = st.selectbox("Select a lease record to view:",
                                       options=saved_lease_names)
         
         if selected_lease:
