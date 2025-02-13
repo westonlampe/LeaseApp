@@ -283,7 +283,7 @@ def main():
                                                     value=5.0)
     payment_timing = st.sidebar.selectbox("Payment Timing", ["end", "begin"])
     
-    # Button: Generate & Save (Append)
+    # 1) Generate & Save (Append)
     if st.sidebar.button("Generate & Save Lease Schedule"):
         df_schedule = generate_amortization_schedule(
             lease_term=lease_term,
@@ -306,6 +306,9 @@ def main():
         save_lease_to_gsheet(lease_name, df_schedule, df_journal, sheet_name="LeaseData")
         
         st.success(f"Lease schedule for '{lease_name}' generated and saved!")
+        
+        # Refresh the local store from GSheets to remain in sync
+        st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
     
     st.write("---")
     st.header("View / Edit Saved Lease")
@@ -364,7 +367,9 @@ def main():
                     # 2) Remove from session state
                     del st.session_state["saved_leases"][selected_lease]
                     st.success(f"Deleted lease '{selected_lease}'!")
-                    st.experimental_rerun()
+                    
+                    # Reload from GSheets to see the updated list
+                    st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
             
             with col2:
                 if st.button("Overwrite with Current Inputs"):
@@ -380,21 +385,24 @@ def main():
                     )
                     updated_journal = generate_monthly_journal_entries(updated_schedule, lease_type=lease_type)
                     
-                    # 1) Overwrite in Google Sheets
+                    # Overwrite in Google Sheets
                     update_lease_in_gsheet(selected_lease, updated_schedule, updated_journal, sheet_name="LeaseData")
                     
-                    # 2) Overwrite in session state
+                    # Overwrite in session state
                     st.session_state["saved_leases"][selected_lease] = {
                         "schedule": updated_schedule,
                         "journal": updated_journal
                     }
                     
                     st.success(f"Lease '{selected_lease}' updated with current sidebar inputs!")
-                    st.experimental_rerun()
+                    
+                    # Reload so we see changes
+                    st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
 
     else:
         st.info("No leases saved yet. Generate a lease schedule to save and display it here.")
 
 if __name__ == "__main__":
     main()
+
 
