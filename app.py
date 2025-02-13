@@ -4,7 +4,7 @@ import numpy as np
 from datetime import date
 
 import gspread
-from google.oauth2 import service_account  # <--- Correct import for service_account.Credentials
+from google.oauth2 import service_account  # For service_account.Credentials
 
 ############################
 # 1. GOOGLE SHEETS HELPERS
@@ -14,29 +14,26 @@ def get_gsheet_connection():
     Creates and returns a gspread client authenticated via
     service_account credentials stored in Streamlit Secrets.
     """
-    # Load service account info from st.secrets
     creds_dict = st.secrets["gcp_service_account"]
-    
-    # Build credentials using the dictionary (no more 'Credentials' undefined!)
     creds = service_account.Credentials.from_service_account_info(
         creds_dict,
-        scopes=["https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive"]
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
     )
-    
-    # Authorize gspread with these credentials
     client = gspread.authorize(creds)
     return client
 
 def load_leases_from_gsheet(sheet_name="LeaseData"):
     """
-    Reads existing rows from a Google Sheets tab and reconstructs
+    Reads existing rows from Google Sheets and reconstructs
     saved lease data (amortization schedule + journal).
     """
     try:
         client = get_gsheet_connection()
-        sheet = client.open(sheet_name).sheet1  # Opens the first worksheet
-        data = sheet.get_all_records()  # Returns a list of dicts
+        sheet = client.open(sheet_name).sheet1
+        data = sheet.get_all_records()
 
         df = pd.DataFrame(data)
         # Expecting columns: ["LeaseName", "SerializedSchedule", "SerializedJournal"]
@@ -44,7 +41,6 @@ def load_leases_from_gsheet(sheet_name="LeaseData"):
         saved_leases = {}
         for _, row in df.iterrows():
             lease_name = row["LeaseName"]
-            # Convert JSON strings back to DataFrames
             schedule_df = pd.read_json(row["SerializedSchedule"])
             journal_df = pd.read_json(row["SerializedJournal"])
             saved_leases[lease_name] = {
@@ -58,14 +54,12 @@ def load_leases_from_gsheet(sheet_name="LeaseData"):
 
 def save_lease_to_gsheet(lease_name, schedule_df, journal_df, sheet_name="LeaseData"):
     """
-    Appends a new row with the lease data to Google Sheets.
-    (Currently appends; could be changed to 'upsert' if you need updates.)
+    Appends a new row: [LeaseName, JSON_Schedule, JSON_Journal].
     """
     try:
         client = get_gsheet_connection()
         sheet = client.open(sheet_name).sheet1
         
-        # Convert DataFrames to JSON strings for storage
         schedule_json = schedule_df.to_json()
         journal_json = journal_df.to_json()
         
@@ -73,6 +67,33 @@ def save_lease_to_gsheet(lease_name, schedule_df, journal_df, sheet_name="LeaseD
         sheet.append_row(new_row, value_input_option="USER_ENTERED")
     except Exception as e:
         st.warning(f"Unable to save to Google Sheets: {e}")
+
+def delete_lease_in_gsheet(lease_name, sheet_name="LeaseData"):
+    """
+    Finds the row containing 'lease_name' in the LeaseName column
+    and deletes that row from Google Sheets.
+    """
+    try:
+        client = get_gsheet_connection()
+        sheet = client.open(sheet_name).sheet1
+        records = sheet.get_all_records()  # Each element is a dict
+        
+        # Row 1 is headers, so data starts at row 2
+        for i, row in enumerate(records, start=2):
+            if row.get("LeaseName") == lease_name:
+                sheet.delete_rows(i)
+                break
+    except Exception as e:
+        st.warning(f"Unable to delete lease '{lease_name}' from Google Sheets: {e}")
+
+def update_lease_in_gsheet(lease_name, schedule_df, journal_df, sheet_name="LeaseData"):
+    """
+    Overwrites (edits) the existing lease by:
+    1) Deleting the old row for 'lease_name'
+    2) Appending a new row with updated schedule/journal
+    """
+    delete_lease_in_gsheet(lease_name, sheet_name)
+    save_lease_to_gsheet(lease_name, schedule_df, journal_df, sheet_name)
 
 ############################
 # 2. HELPER FUNCTIONS
@@ -106,7 +127,9 @@ def generate_amortization_schedule(
     payment_timing="end",
     lease_type="Operating"
 ):
-    monthly_payments = generate_monthly_payments(base_payment, lease_term, annual_escalation_rate, payment_timing)
+    monthly_payments = generate_monthly_payments(
+        base_payment, lease_term, annual_escalation_rate, payment_timing
+    )
     
     monthly_rate = annual_discount_rate / 12.0
     lease_liability = present_value_of_varied_payments(monthly_payments, monthly_rate, payment_timing)
@@ -260,7 +283,7 @@ def main():
                                                     value=5.0)
     payment_timing = st.sidebar.selectbox("Payment Timing", ["end", "begin"])
     
-    # Generate & Save button
+    # Button: Generate & Save (Append)
     if st.sidebar.button("Generate & Save Lease Schedule"):
         df_schedule = generate_amortization_schedule(
             lease_term=lease_term,
@@ -279,19 +302,20 @@ def main():
             "journal": df_journal
         }
         
-        # Save to Google Sheets
+        # Save to Google Sheets (append row)
         save_lease_to_gsheet(lease_name, df_schedule, df_journal, sheet_name="LeaseData")
         
         st.success(f"Lease schedule for '{lease_name}' generated and saved!")
     
     st.write("---")
-    st.header("View Saved Lease")
+    st.header("View / Edit Saved Lease")
     
     saved_lease_names = list(st.session_state["saved_leases"].keys())
     if saved_lease_names:
         selected_lease = st.selectbox("Select a saved lease to view:", options=saved_lease_names)
         
         if selected_lease:
+            # Display the schedule
             st.subheader(f"Lease Amortization Schedule: {selected_lease}")
             df_schedule = st.session_state["saved_leases"][selected_lease]["schedule"]
             st.dataframe(
@@ -305,7 +329,7 @@ def main():
                 })
             )
             
-            # Download link for schedule
+            # Download: schedule
             csv_schedule = df_schedule.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="Download Amortization Schedule (CSV)",
@@ -314,13 +338,14 @@ def main():
                 mime="text/csv"
             )
             
+            # Display the journal
             st.subheader(f"Monthly Journal Entries: {selected_lease}")
             df_journal = st.session_state["saved_leases"][selected_lease]["journal"]
             st.dataframe(
                 df_journal.style.format({"Debit": "{:,.2f}", "Credit": "{:,.2f}"})
             )
             
-            # Download link for journal
+            # Download: journal
             csv_journal = df_journal.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="Download Journal Entries (CSV)",
@@ -328,6 +353,45 @@ def main():
                 file_name=f"{selected_lease}_monthly_journal_entries.csv",
                 mime="text/csv"
             )
+            
+            st.write("---")
+            # Delete or Overwrite
+            col1, col2 = st.columns([1,1])
+            with col1:
+                if st.button("Delete Lease"):
+                    # 1) Delete from Google Sheets
+                    delete_lease_in_gsheet(selected_lease, sheet_name="LeaseData")
+                    # 2) Remove from session state
+                    del st.session_state["saved_leases"][selected_lease]
+                    st.success(f"Deleted lease '{selected_lease}'!")
+                    st.experimental_rerun()
+            
+            with col2:
+                if st.button("Overwrite with Current Inputs"):
+                    # Re-generate schedule from the sidebar's current inputs
+                    updated_schedule = generate_amortization_schedule(
+                        lease_term=lease_term,
+                        base_payment=base_payment_amount,
+                        annual_discount_rate=annual_discount_rate / 100.0,
+                        annual_escalation_rate=annual_escalation_pct / 100.0,
+                        start_date=start_date,
+                        payment_timing=payment_timing,
+                        lease_type=lease_type
+                    )
+                    updated_journal = generate_monthly_journal_entries(updated_schedule, lease_type=lease_type)
+                    
+                    # 1) Overwrite in Google Sheets
+                    update_lease_in_gsheet(selected_lease, updated_schedule, updated_journal, sheet_name="LeaseData")
+                    
+                    # 2) Overwrite in session state
+                    st.session_state["saved_leases"][selected_lease] = {
+                        "schedule": updated_schedule,
+                        "journal": updated_journal
+                    }
+                    
+                    st.success(f"Lease '{selected_lease}' updated with current sidebar inputs!")
+                    st.experimental_rerun()
+
     else:
         st.info("No leases saved yet. Generate a lease schedule to save and display it here.")
 
