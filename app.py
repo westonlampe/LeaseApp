@@ -6,16 +6,82 @@ import gspread
 from google.oauth2 import service_account
 import streamlit as st
 
+############################
+# 2. Load Leases from Google Sheets
+############################
 def get_gsheet_connection():
-    # Load JSON creds from st.secrets
+    """
+    Creates and returns a gspread client authenticated via
+    service_account credentials stored in Streamlit Secrets.
+    """
+    # Read the service account info from st.secrets
     creds_dict = st.secrets["gcp_service_account"]
+    
+    # Build credentials using the dictionary
     creds = service_account.Credentials.from_service_account_info(
         creds_dict,
-        scopes=["https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive"]
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
     )
+    
+    # Authorize gspread with these credentials
     client = gspread.authorize(creds)
     return client
+
+def load_leases_from_gsheet(sheet_name="LeaseData"):
+    """
+    Reads existing rows from a Google Sheets tab and reconstructs 
+    your saved lease data (amortization schedule + journal) if present.
+    """
+    try:
+        client = get_gsheet_connection()
+        sheet = client.open(sheet_name).sheet1  # Opens the first worksheet
+        data = sheet.get_all_records()
+        
+        df = pd.DataFrame(data)
+        # Expecting columns like ["LeaseName", "SerializedSchedule", "SerializedJournal"]
+        
+        saved_leases = {}
+        for _, row in df.iterrows():
+            lease_name = row["LeaseName"]
+            # Convert JSON strings back to DataFrames
+            schedule_df = pd.read_json(row["SerializedSchedule"])
+            journal_df = pd.read_json(row["SerializedJournal"])
+            saved_leases[lease_name] = {
+                "schedule": schedule_df,
+                "journal": journal_df
+            }
+        
+        return saved_leases
+    except Exception as e:
+        st.warning(f"Unable to load from Google Sheets: {e}")
+        return {}
+
+############################
+# 3. Save Leases to Google Sheets
+############################
+def save_lease_to_gsheet(lease_name, schedule_df, journal_df, sheet_name="LeaseData"):
+    """
+    Appends a new row with the lease data to Google Sheets.
+    You might later replace this with an "upsert" if you need
+    to update existing rows for a given lease name.
+    """
+    try:
+        client = get_gsheet_connection()
+        sheet = client.open(sheet_name).sheet1
+        
+        # Convert DataFrames to JSON strings (or CSV) for storage
+        schedule_json = schedule_df.to_json()
+        journal_json = journal_df.to_json()
+        
+        # Append a row: [LeaseName, JSON_Schedule, JSON_Journal]
+        new_row = [lease_name, schedule_json, journal_json]
+        sheet.append_row(new_row, value_input_option="USER_ENTERED")
+    except Exception as e:
+        st.warning(f"Unable to save to Google Sheets: {e}")
+
 
 
 ############################
