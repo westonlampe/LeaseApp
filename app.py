@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import date
+from datetime import date, timedelta
 import gspread
 from google.oauth2 import service_account
 
@@ -27,7 +27,7 @@ def load_leases_from_gsheet(sheet_name="LeaseData"):
         data = sheet.get_all_records()
 
         df = pd.DataFrame(data)
-        # Expecting columns: ["LeaseName", "SerializedSchedule", "SerializedJournal"]
+        # Expecting: ["LeaseName", "SerializedSchedule", "SerializedJournal"]
         
         saved_leases = {}
         for _, row in df.iterrows():
@@ -235,70 +235,113 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
     return pd.DataFrame(entries)
 
 ############################
-# 5. CONSOLIDATED BY PERIOD + DATE FILTER
+# 5. CONSOLIDATED REPORTS (PORTFOLIO-LEVEL), GROUP BY "PERIOD"
 ############################
-def portfolio_consolidated_by_period(all_leases: dict, start_dt: date, end_dt: date):
-    """
-    1) Combine all lease schedules into one DataFrame, keeping columns:
-       Period, Date, Payment, Interest_Expense, Principal,
-       Lease_Liability_Balance, ROU_Asset_Amortization, ROU_Asset_Balance
-    2) Filter rows where Date is between [start_dt, end_dt].
-    3) Group by Period, summing Payment, Interest, Principal, Liability, etc.
-    4) Return a DF with one row per Period, representing the entire portfolio.
-    
-    NOTE: This is naive if leases start on different dates. 
-    Period 1 across two leases might correspond to different calendar months.
-    But it shows how to consolidate by "Period" with a date filter.
-    """
+def portfolio_liab_by_period(all_leases: dict, start_date: date, end_date: date):
     frames = []
     for lease_name, data in all_leases.items():
         df = data["schedule"].copy()
-        # keep only necessary columns
-        df = df[[
-            "Period", "Date", "Payment", "Interest_Expense", "Principal",
-            "Lease_Liability_Balance", "ROU_Asset_Amortization", "ROU_Asset_Balance"
-        ]]
+        df["LeaseName"] = lease_name
         frames.append(df)
+    
     if not frames:
-        return pd.DataFrame()
+        return pd.DataFrame()  # no data at all
     
     big_df = pd.concat(frames, ignore_index=True)
     
-    # Filter by the user-selected date range
-    mask = (big_df["Date"] >= pd.to_datetime(start_dt)) & (big_df["Date"] <= pd.to_datetime(end_dt))
+    # Filter by the date range
+    mask = (big_df["Date"] >= pd.to_datetime(start_date)) & (big_df["Date"] <= pd.to_datetime(end_date))
     big_df = big_df[mask]
     
-    # Group by "Period"
-    sum_cols = [
-        "Payment", "Interest_Expense", "Principal", 
-        "Lease_Liability_Balance", "ROU_Asset_Amortization", "ROU_Asset_Balance"
-    ]
-    grouped = big_df.groupby("Period")[sum_cols].sum().reset_index()
+    if big_df.empty:
+        return pd.DataFrame()  # no rows in that date range
     
-    # rename columns slightly for clarity
+    sum_cols = ["Payment", "Interest_Expense", "Principal", "Lease_Liability_Balance"]
+    grouped = big_df.groupby("Period")[sum_cols].sum().reset_index()
+    grouped = grouped.sort_values("Period")
+    
     grouped.rename(columns={
         "Payment": "Total Payment",
         "Interest_Expense": "Total Interest",
         "Principal": "Total Principal",
-        "Lease_Liability_Balance": "Total Liability Balance",
-        "ROU_Asset_Amortization": "Total ROU Amortization",
-        "ROU_Asset_Balance": "Total ROU Balance"
+        "Lease_Liability_Balance": "Ending Liability"
     }, inplace=True)
+    
+    beginning_liabilities = []
+    prev_end = 0.0
+    for i, row in grouped.iterrows():
+        beginning_liabilities.append(prev_end)
+        prev_end = row["Ending Liability"]
+    grouped.insert(1, "Beginning Liability", beginning_liabilities)
     
     return grouped
 
+def portfolio_rou_by_period(all_leases: dict, start_date: date, end_date: date):
+    frames = []
+    for lease_name, data in all_leases.items():
+        df = data["schedule"].copy()
+        df["LeaseName"] = lease_name
+        frames.append(df)
+    
+    if not frames:
+        return pd.DataFrame()
+    
+    big_df = pd.concat(frames, ignore_index=True)
+    mask = (big_df["Date"] >= pd.to_datetime(start_date)) & (big_df["Date"] <= pd.to_datetime(end_date))
+    big_df = big_df[mask]
+    
+    if big_df.empty:
+        return pd.DataFrame()
+    
+    sum_cols = ["ROU_Asset_Amortization", "ROU_Asset_Balance"]
+    grouped = big_df.groupby("Period")[sum_cols].sum().reset_index()
+    grouped = grouped.sort_values("Period")
+    
+    grouped.rename(columns={
+        "ROU_Asset_Amortization": "Total Amortization",
+        "ROU_Asset_Balance": "Ending ROU Asset"
+    }, inplace=True)
+    
+    beginnings = []
+    prev_end = 0.0
+    for i, row in grouped.iterrows():
+        beginnings.append(prev_end)
+        prev_end = row["Ending ROU Asset"]
+    grouped.insert(1, "Beginning ROU Asset", beginnings)
+    
+    return grouped
 
 ############################
-# 6. STREAMLIT APP (TABS)
+# 6. CONSOLIDATED JOURNAL VIEW
+############################
+def get_all_journal_entries(saved_leases: dict) -> pd.DataFrame:
+    """
+    Concatenate the monthly journals from each lease into one DataFrame,
+    adding a 'LeaseName' column so we can see which lease each entry came from.
+    """
+    frames = []
+    for lease_name, data in saved_leases.items():
+        df_journal = data["journal"].copy()
+        df_journal["LeaseName"] = lease_name
+        frames.append(df_journal)
+    if not frames:
+        return pd.DataFrame()
+    big_df = pd.concat(frames, ignore_index=True)
+    # Sort by Date, then LeaseName, or as you prefer
+    big_df.sort_values(by=["Date", "LeaseName"], inplace=True)
+    return big_df
+
+############################
+# 7. STREAMLIT APP (THREE TABS)
 ############################
 def main():
     st.title("ASC 842 LEASE MODULE")
 
-    # Load existing leases on first run
     if "saved_leases" not in st.session_state:
         st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
 
-    tab1, tab2 = st.tabs(["Manage Leases", "Portfolio Reports"])
+    # Create three tabs: "Manage Leases", "Journal Entries", and "Portfolio Reports"
+    tab1, tab2, tab3 = st.tabs(["Manage Leases", "Journal Entries", "Portfolio Reports"])
 
     # --- TAB 1: Manage Leases ---
     with tab1:
@@ -316,6 +359,7 @@ def main():
                                                         value=5.0)
         payment_timing = st.sidebar.selectbox("Payment Timing", ["end", "begin"])
 
+        # Generate & Save
         if st.sidebar.button("Generate & Save Lease Schedule"):
             df_schedule = generate_amortization_schedule(
                 lease_term=lease_term,
@@ -335,7 +379,6 @@ def main():
             save_lease_to_gsheet(lease_name, df_schedule, df_journal, sheet_name="LeaseData")
             
             st.success(f"Lease schedule for '{lease_name}' generated and saved!")
-            # Refresh from GSheets
             st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
 
         st.write("---")
@@ -345,9 +388,9 @@ def main():
         if saved_lease_names:
             selected_lease = st.selectbox("Select a saved lease to view:", options=saved_lease_names)
             if selected_lease:
-                df_schedule = st.session_state["saved_leases"][selected_lease]["schedule"]
-                df_journal = st.session_state["saved_leases"][selected_lease]["journal"]
-
+                data = st.session_state["saved_leases"][selected_lease]
+                df_schedule = data["schedule"]
+                
                 st.subheader(f"Lease Amortization Schedule: {selected_lease}")
                 st.dataframe(
                     df_schedule.style.format({
@@ -364,18 +407,6 @@ def main():
                     label="Download Amortization Schedule (CSV)",
                     data=csv_schedule,
                     file_name=f"{selected_lease}_amortization_schedule.csv",
-                    mime="text/csv"
-                )
-
-                st.subheader(f"Monthly Journal Entries: {selected_lease}")
-                st.dataframe(
-                    df_journal.style.format({"Debit": "{:,.2f}", "Credit": "{:,.2f}"})
-                )
-                csv_journal = df_journal.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Download Journal Entries (CSV)",
-                    data=csv_journal,
-                    file_name=f"{selected_lease}_monthly_journal_entries.csv",
                     mime="text/csv"
                 )
 
@@ -401,7 +432,7 @@ def main():
                         )
                         updated_journal = generate_monthly_journal_entries(updated_schedule, lease_type=lease_type)
                         
-                        update_lease_in_gsheet(selected_lease, updated_schedule, updated_journal, sheet_name="LeaseData")
+                        update_lease_in_gsheet(selected_lease, updated_schedule, updated_journal, "LeaseData")
                         
                         st.session_state["saved_leases"][selected_lease] = {
                             "schedule": updated_schedule,
@@ -412,44 +443,90 @@ def main():
         else:
             st.info("No leases saved yet. Generate a lease schedule to save and display it here.")
 
-    # --- TAB 2: Portfolio Reports ---
+    # --- TAB 2: Journal Entries ---
     with tab2:
-        st.header("Portfolio-Level Period Consolidation")
-
-        # Date filter for the entire portfolio
-        colA, colB = st.columns(2)
-        with colA:
-            start_filter_date = st.date_input("Reporting Start Date", value=date.today())
-        with colB:
-            end_filter_date = st.date_input("Reporting End Date", value=date.today())
-
+        st.header("Journal Entries")
         if not st.session_state["saved_leases"]:
             st.info("No lease records found. Go to 'Manage Leases' tab to add some!")
         else:
-            df_portfolio = portfolio_consolidated_by_period(
-                st.session_state["saved_leases"], 
-                start_dt=start_filter_date, 
-                end_dt=end_filter_date
-            )
+            # Combine all journal entries
+            df_all_journals = get_all_journal_entries(st.session_state["saved_leases"])
+            if df_all_journals.empty:
+                st.info("No journal entries yet.")
+            else:
+                # Let user choose "All Leases" or a specific lease
+                lease_choices = ["All Leases"] + list(st.session_state["saved_leases"].keys())
+                selected_journal_lease = st.selectbox("Choose Lease for Journal Entries:", options=lease_choices)
+                
+                if selected_journal_lease == "All Leases":
+                    df_show = df_all_journals
+                else:
+                    df_show = df_all_journals[df_all_journals["LeaseName"] == selected_journal_lease]
+                
+                st.dataframe(
+                    df_show.style.format({
+                        "Debit": "{:,.2f}",
+                        "Credit": "{:,.2f}"
+                    })
+                )
+                
+                csv_journals = df_show.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Journal Entries (CSV)",
+                    data=csv_journals,
+                    file_name="journal_entries.csv",
+                    mime="text/csv"
+                )
+    
+    # --- TAB 3: Portfolio Reports ---
+    with tab3:
+        st.header("Portfolio-Level Reports (By Period)")
+        if not st.session_state["saved_leases"]:
+            st.info("No lease records found. Go to 'Manage Leases' tab to add some!")
+        else:
+            st.write("Use the date range to filter which periods/dates are included in the sum.")
+            report_start = st.date_input("Report Start Date", value=date.today() - timedelta(days=365))
+            report_end = st.date_input("Report End Date", value=date.today() + timedelta(days=365))
 
-            if df_portfolio.empty:
-                st.warning("No data in the selected date range.")
+            st.subheader("Consolidated Liability (Period-Level)")
+            df_liab = portfolio_liab_by_period(st.session_state["saved_leases"], report_start, report_end)
+            if df_liab.empty:
+                st.write("No data in the selected date range.")
             else:
                 st.dataframe(
-                    df_portfolio.style.format({
+                    df_liab.style.format({
+                        "Beginning Liability": "{:,.2f}",
                         "Total Payment": "{:,.2f}",
                         "Total Interest": "{:,.2f}",
                         "Total Principal": "{:,.2f}",
-                        "Total Liability Balance": "{:,.2f}",
-                        "Total ROU Amortization": "{:,.2f}",
-                        "Total ROU Balance": "{:,.2f}"
+                        "Ending Liability": "{:,.2f}"
                     })
                 )
-                csv_port = df_portfolio.to_csv(index=False).encode('utf-8')
+                csv_liab = df_liab.to_csv(index=False).encode("utf-8")
                 st.download_button(
-                    label="Download Consolidated Period Report (CSV)",
-                    data=csv_port,
-                    file_name="portfolio_by_period.csv",
+                    label="Download Portfolio Liability Rollforward (CSV)",
+                    data=csv_liab,
+                    file_name="portfolio_liability_rollforward_by_period.csv",
+                    mime="text/csv"
+                )
+
+            st.subheader("Consolidated ROU Asset (Period-Level)")
+            df_rou = portfolio_rou_by_period(st.session_state["saved_leases"], report_start, report_end)
+            if df_rou.empty:
+                st.write("No data in the selected date range.")
+            else:
+                st.dataframe(
+                    df_rou.style.format({
+                        "Beginning ROU Asset": "{:,.2f}",
+                        "Total Amortization": "{:,.2f}",
+                        "Ending ROU Asset": "{:,.2f}"
+                    })
+                )
+                csv_rou = df_rou.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="Download Portfolio ROU Asset Rollforward (CSV)",
+                    data=csv_rou,
+                    file_name="portfolio_rou_asset_rollforward_by_period.csv",
                     mime="text/csv"
                 )
 
