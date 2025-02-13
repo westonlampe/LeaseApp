@@ -2,20 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import date
-import json
-from google.oauth2 import service_account
-import streamlit as st
-
-def get_gsheet_connection():
-    # Load from st.secrets
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = service_account.Credentials.from_service_account_info(
-        creds_dict, 
-        scopes=["https://www.googleapis.com/auth/spreadsheets", 
-                "https://www.googleapis.com/auth/drive"]
-    )
-    client = gspread.authorize(creds)
-    return client
 import gspread
 from google.oauth2 import service_account
 import streamlit as st
