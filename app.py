@@ -29,7 +29,7 @@ def load_leases_from_gsheet(sheet_name="LeaseData"):
         data = sheet.get_all_records()
 
         df = pd.DataFrame(data)
-        # Expecting: ["LeaseName", "SerializedSchedule", "SerializedJournal"]
+        # Expecting columns: ["LeaseName", "SerializedSchedule", "SerializedJournal"]
         
         saved_leases = {}
         for _, row in df.iterrows():
@@ -72,6 +72,7 @@ def delete_lease_in_gsheet(lease_name, sheet_name="LeaseData"):
         st.warning(f"Unable to delete lease '{lease_name}' from Google Sheets: {e}")
 
 def update_lease_in_gsheet(lease_name, schedule_df, journal_df, sheet_name="LeaseData"):
+    # Helper: delete + re-append
     delete_lease_in_gsheet(lease_name, sheet_name)
     save_lease_to_gsheet(lease_name, schedule_df, journal_df, sheet_name)
 
@@ -82,8 +83,8 @@ def generate_monthly_payments(base_payment, lease_term, annual_escalation_rate, 
     payments = []
     for month in range(1, lease_term + 1):
         years_elapsed = (month - 1) // 12
-        payment_for_month = base_payment * (1 + annual_escalation_rate) ** years_elapsed
-        payments.append(payment_for_month)
+        pay = base_payment * (1 + annual_escalation_rate) ** years_elapsed
+        payments.append(pay)
     return payments
 
 def present_value_of_varied_payments(payments, monthly_rate, payment_timing="end"):
@@ -121,36 +122,36 @@ def generate_amortization_schedule(
         total_lease_expense_per_month = sum(monthly_payments) / lease_term
     
     for period in range(1, lease_term + 1):
-        current_payment = monthly_payments[period - 1]
-        interest_expense = liability_balance * monthly_rate
+        payment = monthly_payments[period - 1]
+        interest = liability_balance * monthly_rate
         
         if payment_timing == "end":
-            principal = current_payment - interest_expense
+            principal = payment - interest
         else:
-            principal = current_payment
-            interest_expense = (liability_balance - principal) * monthly_rate
+            principal = payment
+            interest = (liability_balance - principal) * monthly_rate
         
-        new_liability_balance = liability_balance - principal
+        new_balance = liability_balance - principal
         
         if lease_type == "Operating":
             total_lease_expense = sum(monthly_payments) / lease_term
-            rou_amortization = total_lease_expense - interest_expense
-            rou_asset -= rou_amortization
+            rou_amort = total_lease_expense - interest
+            rou_asset -= rou_amort
         else:
-            rou_amortization = rou_asset / lease_term
+            rou_amort = rou_asset / lease_term
         
         schedule_rows.append({
             "Period": period,
             "Date": pd.to_datetime(start_date) + pd.DateOffset(months=period - 1),
-            "Payment": current_payment,
-            "Interest_Expense": interest_expense,
+            "Payment": payment,
+            "Interest_Expense": interest,
             "Principal": principal,
-            "Lease_Liability_Balance": new_liability_balance,
-            "ROU_Asset_Amortization": rou_amortization,
+            "Lease_Liability_Balance": new_balance,
+            "ROU_Asset_Amortization": rou_amort,
             "ROU_Asset_Balance": max(rou_asset, 0),
         })
         
-        liability_balance = new_liability_balance
+        liability_balance = new_balance
     
     return pd.DataFrame(schedule_rows)
 
@@ -162,8 +163,8 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
     for _, row in schedule_df.iterrows():
         period = row["Period"]
         date_val = row["Date"]
-        payment = row["Payment"]
-        interest_expense = row["Interest_Expense"]
+        pay = row["Payment"]
+        interest = row["Interest_Expense"]
         principal = row["Principal"]
         rou_amort = row["ROU_Asset_Amortization"]
         
@@ -172,7 +173,7 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
                 "Date": date_val,
                 "Period": period,
                 "Account": "Lease Expense",
-                "Debit": round(payment, 2),
+                "Debit": round(pay, 2),
                 "Credit": 0.0
             })
             entries.append({
@@ -180,7 +181,7 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
                 "Period": period,
                 "Account": "Cash",
                 "Debit": 0.0,
-                "Credit": round(payment, 2)
+                "Credit": round(pay, 2)
             })
             if rou_amort != 0.0:
                 entries.append({
@@ -202,7 +203,7 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
                 "Date": date_val,
                 "Period": period,
                 "Account": "Interest Expense",
-                "Debit": round(interest_expense, 2),
+                "Debit": round(interest, 2),
                 "Credit": 0.0
             })
             entries.append({
@@ -217,7 +218,7 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
                 "Period": period,
                 "Account": "Cash",
                 "Debit": 0.0,
-                "Credit": round(payment, 2)
+                "Credit": round(pay, 2)
             })
             if rou_amort != 0.0:
                 entries.append({
@@ -237,7 +238,7 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
     return pd.DataFrame(entries)
 
 ############################
-# 5. CONSOLIDATED REPORTS (PORTFOLIO-LEVEL)
+# 5. CONSOLIDATED REPORTS
 ############################
 def portfolio_liab_by_period(all_leases: dict, start_date: date, end_date: date):
     frames = []
@@ -258,9 +259,8 @@ def portfolio_liab_by_period(all_leases: dict, start_date: date, end_date: date)
         return pd.DataFrame()
     
     sum_cols = ["Payment", "Interest_Expense", "Principal", "Lease_Liability_Balance"]
-    grouped = big_df.groupby("Period")[sum_cols].sum().reset_index()
-    grouped = grouped.sort_values("Period")
-    
+    grouped = big_df.groupby("Period")[sum_cols].sum().reset_index().sort_values("Period")
+
     grouped.rename(columns={
         "Payment": "Total Payment",
         "Interest_Expense": "Total Interest",
@@ -295,9 +295,8 @@ def portfolio_rou_by_period(all_leases: dict, start_date: date, end_date: date):
         return pd.DataFrame()
     
     sum_cols = ["ROU_Asset_Amortization", "ROU_Asset_Balance"]
-    grouped = big_df.groupby("Period")[sum_cols].sum().reset_index()
-    grouped = grouped.sort_values("Period")
-    
+    grouped = big_df.groupby("Period")[sum_cols].sum().reset_index().sort_values("Period")
+
     grouped.rename(columns={
         "ROU_Asset_Amortization": "Total Amortization",
         "ROU_Asset_Balance": "Ending ROU Asset"
@@ -328,21 +327,21 @@ def get_all_journal_entries(saved_leases: dict) -> pd.DataFrame:
     return big_df
 
 ############################
-# 7. STREAMLIT APP (Four TABS)
+# 7. STREAMLIT APP (FOUR TABS)
 ############################
 def main():
     st.title("ASC 842 LEASE MODULE")
 
-    # Load existing leases from Google Sheets on first run
+    # 1) Load existing leases from Google Sheets on first run
     if "saved_leases" not in st.session_state:
         st.session_state["saved_leases"] = load_leases_from_gsheet("LeaseData")
 
-    # Create tabs
+    # TABS
     tab1, tab2, tab3, tab4 = st.tabs(["Manage Leases", "Journal Entries", "Portfolio Reports", "Dashboard"])
 
     # --- TAB 1: Manage Leases ---
     with tab1:
-        # Sidebar stuff
+        # Sidebar
         with st.sidebar:
             st.header("Add/Update Single Lease")
             lease_name = st.text_input("Lease Name/ID", value="My Lease")
@@ -370,7 +369,7 @@ def main():
                 )
                 df_journal = generate_monthly_journal_entries(df_schedule, lease_type=lease_type)
                 
-                # Save locally
+                # Save in session
                 st.session_state["saved_leases"][lease_name] = {
                     "schedule": df_schedule,
                     "journal": df_journal
@@ -593,26 +592,25 @@ def main():
     with tab4:
         st.header("Dashboard: Graphs & Charts")
 
-        # We'll do a couple of sample charts:
         if not st.session_state["saved_leases"]:
             st.info("No lease data to display. Please add some leases first.")
         else:
             # 1) Bar chart: total Payment vs. total Interest by lease
-            df_all = pd.DataFrame()  # we will gather Payment and Interest sums by lease
+            rows = []
             for lease_name, data in st.session_state["saved_leases"].items():
                 schedule_df = data["schedule"]
                 total_payment = schedule_df["Payment"].sum()
                 total_interest = schedule_df["Interest_Expense"].sum()
-                df_all = df_all.append({
+                rows.append({
                     "LeaseName": lease_name,
                     "TotalPayment": total_payment,
                     "TotalInterest": total_interest
-                }, ignore_index=True)
+                })
 
+            df_all = pd.DataFrame(rows)
             if df_all.empty:
                 st.info("No schedules found to chart.")
             else:
-                # Bar chart with Plotly
                 fig_bar = px.bar(
                     df_all,
                     x="LeaseName",
@@ -622,22 +620,18 @@ def main():
                 )
                 st.plotly_chart(fig_bar, use_container_width=True)
 
-            # 2) Line chart: monthly total liability (summed across all leases) over time
-            # We'll merge all schedules into one DF with ["Date", "Lease_Liability_Balance"], then group by date
+            # 2) Line chart: monthly total liability across all leases
             frames = []
             for lease_name, data in st.session_state["saved_leases"].items():
-                df_sch = data["schedule"].copy()
-                frames.append(df_sch)
+                frames.append(data["schedule"])
 
             if frames:
                 combined_df = pd.concat(frames, ignore_index=True)
-                # group by date, sum the "Lease_Liability_Balance"
                 line_data = combined_df.groupby("Date")["Lease_Liability_Balance"].sum().reset_index()
-                line_data = line_data.sort_values("Date")
+                line_data.sort_values("Date", inplace=True)
 
-                # Plotly line chart
                 fig_line = px.line(
-                    line_data, 
+                    line_data,
                     x="Date",
                     y="Lease_Liability_Balance",
                     title="Total Lease Liability Over Time"
@@ -645,10 +639,9 @@ def main():
                 st.plotly_chart(fig_line, use_container_width=True)
 
             st.write("---")
-            st.write("Here's an example Matplotlib chart too (Amortization distribution)")
+            st.write("Here's an example Matplotlib chart too (Amortization distribution).")
 
-            # Simple example: Summation of ROU_Asset_Amortization vs. Payment across all leases
-            # We'll do a small pie chart for demonstration
+            # 3) Simple Pie Chart Example
             if frames:
                 combined_df = pd.concat(frames, ignore_index=True)
                 total_amort = combined_df["ROU_Asset_Amortization"].sum()
@@ -659,8 +652,9 @@ def main():
 
                 fig, ax = plt.subplots()
                 ax.pie(values, labels=labels, autopct="%1.1f%%", startangle=140)
-                ax.axis("equal")  # Equal aspect ratio ensures the pie is drawn as a circle.
+                ax.axis("equal")  # Circle shape
                 st.pyplot(fig)
 
 if __name__ == "__main__":
     main()
+
