@@ -386,7 +386,7 @@ def main():
 
         saved_lease_names = list(st.session_state["saved_leases"].keys())
         if saved_lease_names:
-            selected_lease = st.selectbox("select:", options=saved_lease_names)
+            selected_lease = st.selectbox("", options=saved_lease_names)
             if selected_lease:
                 data = st.session_state["saved_leases"][selected_lease]
                 df_schedule = data["schedule"]
