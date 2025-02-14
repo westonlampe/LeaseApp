@@ -4,6 +4,8 @@ import numpy as np
 from datetime import date, timedelta
 import gspread
 from google.oauth2 import service_account
+import plotly.express as px
+import matplotlib.pyplot as plt
 
 ############################
 # 1. GOOGLE SHEETS HELPERS
@@ -70,7 +72,6 @@ def delete_lease_in_gsheet(lease_name, sheet_name="LeaseData"):
         st.warning(f"Unable to delete lease '{lease_name}' from Google Sheets: {e}")
 
 def update_lease_in_gsheet(lease_name, schedule_df, journal_df, sheet_name="LeaseData"):
-    # Helper: delete + re-append
     delete_lease_in_gsheet(lease_name, sheet_name)
     save_lease_to_gsheet(lease_name, schedule_df, journal_df, sheet_name)
 
@@ -236,7 +237,7 @@ def generate_monthly_journal_entries(schedule_df, lease_type="Operating"):
     return pd.DataFrame(entries)
 
 ############################
-# 5. CONSOLIDATED REPORTS (PORTFOLIO-LEVEL), GROUP BY "PERIOD"
+# 5. CONSOLIDATED REPORTS (PORTFOLIO-LEVEL)
 ############################
 def portfolio_liab_by_period(all_leases: dict, start_date: date, end_date: date):
     frames = []
@@ -246,7 +247,7 @@ def portfolio_liab_by_period(all_leases: dict, start_date: date, end_date: date)
         frames.append(df)
     
     if not frames:
-        return pd.DataFrame()  # no data at all
+        return pd.DataFrame()
     
     big_df = pd.concat(frames, ignore_index=True)
     
@@ -254,7 +255,7 @@ def portfolio_liab_by_period(all_leases: dict, start_date: date, end_date: date)
     big_df = big_df[mask]
     
     if big_df.empty:
-        return pd.DataFrame()  # no rows in that date range
+        return pd.DataFrame()
     
     sum_cols = ["Payment", "Interest_Expense", "Principal", "Lease_Liability_Balance"]
     grouped = big_df.groupby("Period")[sum_cols].sum().reset_index()
@@ -327,7 +328,7 @@ def get_all_journal_entries(saved_leases: dict) -> pd.DataFrame:
     return big_df
 
 ############################
-# 7. STREAMLIT APP (THREE TABS)
+# 7. STREAMLIT APP (Four TABS)
 ############################
 def main():
     st.title("ASC 842 LEASE MODULE")
@@ -337,11 +338,11 @@ def main():
         st.session_state["saved_leases"] = load_leases_from_gsheet("LeaseData")
 
     # Create tabs
-    tab1, tab2, tab3 = st.tabs(["Manage Leases", "Journal Entries", "Portfolio Reports"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Manage Leases", "Journal Entries", "Portfolio Reports", "Dashboard"])
 
     # --- TAB 1: Manage Leases ---
     with tab1:
-        # === Sidebar for Single Lease + Mass Upload ===
+        # Sidebar stuff
         with st.sidebar:
             st.header("Add/Update Single Lease")
             lease_name = st.text_input("Lease Name/ID", value="My Lease")
@@ -441,7 +442,7 @@ def main():
             - `PaymentTiming` ("end" or "begin")
             """)
 
-        # === Main area: "View / Edit Saved Lease" ===
+        # Main area: "View / Edit Saved Lease"
         st.subheader("View / Edit Saved Lease")
 
         saved_lease_names = list(st.session_state["saved_leases"].keys())
@@ -481,7 +482,6 @@ def main():
                         st.session_state["saved_leases"] = load_leases_from_gsheet("LeaseData")
                 with col2:
                     if st.button("Overwrite with Current Sidebar Inputs"):
-                        # We'll use the same sidebar input fields
                         updated_schedule = generate_amortization_schedule(
                             lease_term=lease_term,
                             base_payment=base_payment_amount,
@@ -510,7 +510,6 @@ def main():
         if not st.session_state["saved_leases"]:
             st.info("No lease records found. Go to 'Manage Leases' tab to add some!")
         else:
-            # Combine all journal entries
             df_all_journals = get_all_journal_entries(st.session_state["saved_leases"])
             if df_all_journals.empty:
                 st.info("No journal entries yet.")
@@ -589,6 +588,79 @@ def main():
                     file_name="portfolio_rou_asset_rollforward_by_period.csv",
                     mime="text/csv"
                 )
+
+    # --- TAB 4: Dashboard ---
+    with tab4:
+        st.header("Dashboard: Graphs & Charts")
+
+        # We'll do a couple of sample charts:
+        if not st.session_state["saved_leases"]:
+            st.info("No lease data to display. Please add some leases first.")
+        else:
+            # 1) Bar chart: total Payment vs. total Interest by lease
+            df_all = pd.DataFrame()  # we will gather Payment and Interest sums by lease
+            for lease_name, data in st.session_state["saved_leases"].items():
+                schedule_df = data["schedule"]
+                total_payment = schedule_df["Payment"].sum()
+                total_interest = schedule_df["Interest_Expense"].sum()
+                df_all = df_all.append({
+                    "LeaseName": lease_name,
+                    "TotalPayment": total_payment,
+                    "TotalInterest": total_interest
+                }, ignore_index=True)
+
+            if df_all.empty:
+                st.info("No schedules found to chart.")
+            else:
+                # Bar chart with Plotly
+                fig_bar = px.bar(
+                    df_all,
+                    x="LeaseName",
+                    y=["TotalPayment", "TotalInterest"],
+                    barmode="group",
+                    title="Total Payment vs. Interest by Lease"
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+            # 2) Line chart: monthly total liability (summed across all leases) over time
+            # We'll merge all schedules into one DF with ["Date", "Lease_Liability_Balance"], then group by date
+            frames = []
+            for lease_name, data in st.session_state["saved_leases"].items():
+                df_sch = data["schedule"].copy()
+                frames.append(df_sch)
+
+            if frames:
+                combined_df = pd.concat(frames, ignore_index=True)
+                # group by date, sum the "Lease_Liability_Balance"
+                line_data = combined_df.groupby("Date")["Lease_Liability_Balance"].sum().reset_index()
+                line_data = line_data.sort_values("Date")
+
+                # Plotly line chart
+                fig_line = px.line(
+                    line_data, 
+                    x="Date",
+                    y="Lease_Liability_Balance",
+                    title="Total Lease Liability Over Time"
+                )
+                st.plotly_chart(fig_line, use_container_width=True)
+
+            st.write("---")
+            st.write("Here's an example Matplotlib chart too (Amortization distribution)")
+
+            # Simple example: Summation of ROU_Asset_Amortization vs. Payment across all leases
+            # We'll do a small pie chart for demonstration
+            if frames:
+                combined_df = pd.concat(frames, ignore_index=True)
+                total_amort = combined_df["ROU_Asset_Amortization"].sum()
+                total_pay = combined_df["Payment"].sum()
+
+                labels = ["Total ROU Amort.", "Total Payment"]
+                values = [total_amort, total_pay]
+
+                fig, ax = plt.subplots()
+                ax.pie(values, labels=labels, autopct="%1.1f%%", startangle=140)
+                ax.axis("equal")  # Equal aspect ratio ensures the pie is drawn as a circle.
+                st.pyplot(fig)
 
 if __name__ == "__main__":
     main()
