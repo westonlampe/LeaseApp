@@ -382,17 +382,7 @@ def main():
 
             st.write("---")
             st.header("Mass Upload Leases via CSV")
-            st.markdown("""
-            **CSV Format** (one lease per row). Required columns:
-            - `LeaseName`
-            - `LeaseType` (Operating or Finance)
-            - `StartDate` (YYYY-MM-DD)
-            - `LeaseTerm` (integer, months)
-            - `DiscountRate` (annual %)
-            - `BasePayment` (float)
-            - `EscalationRate` (annual %)
-            - `PaymentTiming` ("end" or "begin")
-            """)
+
             uploaded_file = st.file_uploader("Upload CSV for multiple leases", type=["csv"])
             if uploaded_file is not None:
                 if st.button("Process CSV"):
@@ -439,6 +429,17 @@ def main():
                                 error_count += 1
                         st.success(f"CSV processed! {success_count} leases uploaded, {error_count} errors.")
                         st.session_state["saved_leases"] = load_leases_from_gsheet("LeaseData")
+            st.markdown("""
+            **CSV Format** (one lease per row). Required columns:
+            - `LeaseName`
+            - `LeaseType` (Operating or Finance)
+            - `StartDate` (YYYY-MM-DD)
+            - `LeaseTerm` (integer, months)
+            - `DiscountRate` (annual %)
+            - `BasePayment` (float)
+            - `EscalationRate` (annual %)
+            - `PaymentTiming` ("end" or "begin")
+            """)
 
         # === Main area: "View / Edit Saved Lease" ===
         st.subheader("View / Edit Saved Lease")
