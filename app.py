@@ -341,12 +341,12 @@ def main():
         st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
 
     # Create three tabs: "Manage Leases", "Journal Entries", and "Portfolio Reports"
-    tab1, tab2, tab3 = st.tabs(["Manage Leases", "Journal Entries", "Portfolio Reports"])
+    tab1, tab2, tab3 = st.tabs(["Lease Records", "Journal Entries", "Portfolio Reports"])
 
     # --- TAB 1: Manage Leases ---
     with tab1:
         st.sidebar.header("Lease Inputs")
-        lease_name = st.sidebar.text_input("Lease Name/ID", value="My Lease")
+        lease_name = st.sidebar.text_input("Lease Name", value="My Lease")
         lease_type = st.sidebar.selectbox("Lease Classification", ["Operating", "Finance"])
         start_date_input = st.sidebar.date_input("Lease Start Date", value=date.today())
         lease_term = st.sidebar.number_input("Lease Term (months)", min_value=1, value=36)
@@ -382,11 +382,11 @@ def main():
             st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
 
         st.write("---")
-        st.header("View / Edit Saved Lease")
+        st.header("LEASE RECORD")
 
         saved_lease_names = list(st.session_state["saved_leases"].keys())
         if saved_lease_names:
-            selected_lease = st.selectbox("Select a saved lease to view:", options=saved_lease_names)
+            selected_lease = st.selectbox("select:", options=saved_lease_names)
             if selected_lease:
                 data = st.session_state["saved_leases"][selected_lease]
                 df_schedule = data["schedule"]
