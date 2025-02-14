@@ -117,7 +117,6 @@ def generate_amortization_schedule(
     liability_balance = lease_liability
     
     if lease_type == "Operating":
-        # For Operating, you wanted a straight-line total expense approach:
         total_lease_expense_per_month = sum(monthly_payments) / lease_term
     
     for period in range(1, lease_term + 1):
@@ -335,118 +334,113 @@ def main():
 
     # Load existing leases from Google Sheets on first run
     if "saved_leases" not in st.session_state:
-        st.session_state["saved_leases"] = load_leases_from_gsheet(sheet_name="LeaseData")
+        st.session_state["saved_leases"] = load_leases_from_gsheet("LeaseData")
 
-    # TABS: "Manage Leases", "Journal Entries", "Portfolio Reports"
+    # Create tabs
     tab1, tab2, tab3 = st.tabs(["Manage Leases", "Journal Entries", "Portfolio Reports"])
 
     # --- TAB 1: Manage Leases ---
     with tab1:
-        st.subheader("Add/Update a Single Lease")
-        lease_name = st.text_input("Lease Name/ID", value="My Lease")
-        lease_type = st.selectbox("Lease Classification", ["Operating", "Finance"])
-        start_date_input = st.date_input("Lease Start Date", value=date.today())
-        lease_term = st.number_input("Lease Term (months)", min_value=1, value=36)
-        annual_discount_rate = st.number_input("Annual Discount Rate (%)", min_value=0.0, value=5.0)
-        base_payment_amount = st.number_input("Base Monthly Payment (initial year)",
-                                              min_value=0.0,
-                                              value=1000.0)
-        annual_escalation_pct = st.number_input("Annual Payment Escalation Rate (%)",
-                                                min_value=0.0,
-                                                value=5.0)
-        payment_timing = st.selectbox("Payment Timing", ["end", "begin"])
+        # === Sidebar for Single Lease + Mass Upload ===
+        with st.sidebar:
+            st.header("Add/Update Single Lease")
+            lease_name = st.text_input("Lease Name/ID", value="My Lease")
+            lease_type = st.selectbox("Lease Classification", ["Operating", "Finance"])
+            start_date_input = st.date_input("Lease Start Date", value=date.today())
+            lease_term = st.number_input("Lease Term (months)", min_value=1, value=36)
+            annual_discount_rate = st.number_input("Annual Discount Rate (%)", min_value=0.0, value=5.0)
+            base_payment_amount = st.number_input("Base Monthly Payment (initial year)",
+                                                  min_value=0.0,
+                                                  value=1000.0)
+            annual_escalation_pct = st.number_input("Annual Payment Escalation Rate (%)",
+                                                    min_value=0.0,
+                                                    value=5.0)
+            payment_timing = st.selectbox("Payment Timing", ["end", "begin"])
 
-        if st.button("Generate & Save Lease Schedule"):
-            df_schedule = generate_amortization_schedule(
-                lease_term=lease_term,
-                base_payment=base_payment_amount,
-                annual_discount_rate=annual_discount_rate / 100.0,
-                annual_escalation_rate=annual_escalation_pct / 100.0,
-                start_date=start_date_input,
-                payment_timing=payment_timing,
-                lease_type=lease_type
-            )
-            df_journal = generate_monthly_journal_entries(df_schedule, lease_type=lease_type)
-            
-            # Save locally
-            st.session_state["saved_leases"][lease_name] = {
-                "schedule": df_schedule,
-                "journal": df_journal
-            }
-            # Save to Google Sheets
-            save_lease_to_gsheet(lease_name, df_schedule, df_journal)
-            
-            st.success(f"Lease schedule for '{lease_name}' generated and saved!")
-            # Refresh from GSheets
-            st.session_state["saved_leases"] = load_leases_from_gsheet()
+            if st.button("Generate & Save Lease Schedule"):
+                df_schedule = generate_amortization_schedule(
+                    lease_term=lease_term,
+                    base_payment=base_payment_amount,
+                    annual_discount_rate=annual_discount_rate / 100.0,
+                    annual_escalation_rate=annual_escalation_pct / 100.0,
+                    start_date=start_date_input,
+                    payment_timing=payment_timing,
+                    lease_type=lease_type
+                )
+                df_journal = generate_monthly_journal_entries(df_schedule, lease_type=lease_type)
+                
+                # Save locally
+                st.session_state["saved_leases"][lease_name] = {
+                    "schedule": df_schedule,
+                    "journal": df_journal
+                }
+                # Save to Google Sheets
+                save_lease_to_gsheet(lease_name, df_schedule, df_journal, "LeaseData")
+                
+                st.success(f"Lease schedule for '{lease_name}' generated and saved!")
+                st.session_state["saved_leases"] = load_leases_from_gsheet("LeaseData")
 
-        st.write("---")
-        st.subheader("Mass Upload Leases via CSV")
-        """
-        **CSV Format** (one lease per row). Required columns:
-        - `LeaseName`
-        - `LeaseType` (Operating or Finance)
-        - `StartDate` (YYYY-MM-DD)
-        - `LeaseTerm` (integer, months)
-        - `DiscountRate` (annual %)
-        - `BasePayment` (float)
-        - `EscalationRate` (annual %)
-        - `PaymentTiming` ("end" or "begin")
-        """
-        uploaded_file = st.file_uploader("Upload CSV for multiple leases", type=["csv"])
-        if uploaded_file is not None:
-            if st.button("Process CSV"):
-                df_csv = pd.read_csv(uploaded_file)
-                # Validate columns
-                required_cols = ["LeaseName", "LeaseType", "StartDate", "LeaseTerm",
-                                 "DiscountRate", "BasePayment", "EscalationRate", "PaymentTiming"]
-                missing = [c for c in required_cols if c not in df_csv.columns]
-                if missing:
-                    st.error(f"Missing columns: {missing}. Please fix CSV.")
-                else:
-                    # For each row, parse, generate schedule/journal, save
-                    success_count = 0
-                    error_count = 0
-                    for idx, row in df_csv.iterrows():
-                        try:
-                            ln = str(row["LeaseName"]).strip()
-                            lt = str(row["LeaseType"]).strip()
-                            sd = pd.to_datetime(row["StartDate"]).date()
-                            term = int(row["LeaseTerm"])
-                            dr = float(row["DiscountRate"])/100.0
-                            bp = float(row["BasePayment"])
-                            esc = float(row["EscalationRate"])/100.0
-                            pt = str(row["PaymentTiming"]).lower()
-                            
-                            # Generate
-                            schedule = generate_amortization_schedule(
-                                lease_term=term,
-                                base_payment=bp,
-                                annual_discount_rate=dr,
-                                annual_escalation_rate=esc,
-                                start_date=sd,
-                                payment_timing=pt,
-                                lease_type=lt
-                            )
-                            journal = generate_monthly_journal_entries(schedule, lease_type=lt)
+            st.write("---")
+            st.header("Mass Upload Leases via CSV")
+            st.markdown("""
+            **CSV Format** (one lease per row). Required columns:
+            - `LeaseName`
+            - `LeaseType` (Operating or Finance)
+            - `StartDate` (YYYY-MM-DD)
+            - `LeaseTerm` (integer, months)
+            - `DiscountRate` (annual %)
+            - `BasePayment` (float)
+            - `EscalationRate` (annual %)
+            - `PaymentTiming` ("end" or "begin")
+            """)
+            uploaded_file = st.file_uploader("Upload CSV for multiple leases", type=["csv"])
+            if uploaded_file is not None:
+                if st.button("Process CSV"):
+                    df_csv = pd.read_csv(uploaded_file)
+                    required_cols = ["LeaseName", "LeaseType", "StartDate", "LeaseTerm",
+                                     "DiscountRate", "BasePayment", "EscalationRate", "PaymentTiming"]
+                    missing = [c for c in required_cols if c not in df_csv.columns]
+                    if missing:
+                        st.error(f"Missing columns: {missing}. Please fix CSV.")
+                    else:
+                        success_count = 0
+                        error_count = 0
+                        for idx, row in df_csv.iterrows():
+                            try:
+                                ln = str(row["LeaseName"]).strip()
+                                lt = str(row["LeaseType"]).strip()
+                                sd = pd.to_datetime(row["StartDate"]).date()
+                                term = int(row["LeaseTerm"])
+                                dr = float(row["DiscountRate"])/100.0
+                                bp = float(row["BasePayment"])
+                                esc = float(row["EscalationRate"])/100.0
+                                pt = str(row["PaymentTiming"]).lower()
+                                
+                                schedule = generate_amortization_schedule(
+                                    lease_term=term,
+                                    base_payment=bp,
+                                    annual_discount_rate=dr,
+                                    annual_escalation_rate=esc,
+                                    start_date=sd,
+                                    payment_timing=pt,
+                                    lease_type=lt
+                                )
+                                journal = generate_monthly_journal_entries(schedule, lease_type=lt)
 
-                            # Save in session
-                            st.session_state["saved_leases"][ln] = {
-                                "schedule": schedule,
-                                "journal": journal
-                            }
-                            # Save to gsheet
-                            save_lease_to_gsheet(ln, schedule, journal)
-                            
-                            success_count += 1
-                        except Exception as ex:
-                            st.warning(f"Row {idx} failed: {ex}")
-                            error_count += 1
-                    st.success(f"CSV processed! {success_count} leases uploaded, {error_count} errors.")
-                    # Refresh
-                    st.session_state["saved_leases"] = load_leases_from_gsheet()
-        
-        st.write("---")
+                                st.session_state["saved_leases"][ln] = {
+                                    "schedule": schedule,
+                                    "journal": journal
+                                }
+                                save_lease_to_gsheet(ln, schedule, journal, "LeaseData")
+                                
+                                success_count += 1
+                            except Exception as ex:
+                                st.warning(f"Row {idx} failed: {ex}")
+                                error_count += 1
+                        st.success(f"CSV processed! {success_count} leases uploaded, {error_count} errors.")
+                        st.session_state["saved_leases"] = load_leases_from_gsheet("LeaseData")
+
+        # === Main area: "View / Edit Saved Lease" ===
         st.subheader("View / Edit Saved Lease")
 
         saved_lease_names = list(st.session_state["saved_leases"].keys())
@@ -480,12 +474,13 @@ def main():
                 col1, col2 = st.columns([1,1])
                 with col1:
                     if st.button("Delete Lease"):
-                        delete_lease_in_gsheet(selected_lease)
+                        delete_lease_in_gsheet(selected_lease, "LeaseData")
                         del st.session_state["saved_leases"][selected_lease]
                         st.success(f"Deleted lease '{selected_lease}'!")
-                        st.session_state["saved_leases"] = load_leases_from_gsheet()
+                        st.session_state["saved_leases"] = load_leases_from_gsheet("LeaseData")
                 with col2:
                     if st.button("Overwrite with Current Sidebar Inputs"):
+                        # We'll use the same sidebar input fields
                         updated_schedule = generate_amortization_schedule(
                             lease_term=lease_term,
                             base_payment=base_payment_amount,
@@ -497,16 +492,16 @@ def main():
                         )
                         updated_journal = generate_monthly_journal_entries(updated_schedule, lease_type=lease_type)
                         
-                        update_lease_in_gsheet(selected_lease, updated_schedule, updated_journal)
+                        update_lease_in_gsheet(selected_lease, updated_schedule, updated_journal, "LeaseData")
                         
                         st.session_state["saved_leases"][selected_lease] = {
                             "schedule": updated_schedule,
                             "journal": updated_journal
                         }
                         st.success(f"Lease '{selected_lease}' updated with current sidebar inputs!")
-                        st.session_state["saved_leases"] = load_leases_from_gsheet()
+                        st.session_state["saved_leases"] = load_leases_from_gsheet("LeaseData")
         else:
-            st.info("No leases saved yet. Generate or upload a lease to display it here.")
+            st.info("No leases saved yet. Create or upload some in the sidebar to display them here.")
 
     # --- TAB 2: Journal Entries ---
     with tab2:
