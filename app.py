@@ -383,7 +383,7 @@ def main():
             st.write("---")
             st.header("Mass Upload Leases via CSV")
 
-            uploaded_file = st.file_uploader("Upload CSV for multiple leases", type=["csv"])
+            uploaded_file = st.file_uploader("", type=["csv"])
             if uploaded_file is not None:
                 if st.button("Process CSV"):
                     df_csv = pd.read_csv(uploaded_file)
