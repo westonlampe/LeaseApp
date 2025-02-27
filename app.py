@@ -327,9 +327,91 @@ def get_all_journal_entries(saved_leases: dict) -> pd.DataFrame:
     return big_df
 
 ############################
-# 7. STREAMLIT APP (FOUR TABS)
+# 7. CUSTOM NETGAIN STYLING
+############################
+def set_netgain_style():
+    """
+    Injects custom CSS to style the Streamlit app with a
+    Netgain-inspired color scheme.
+    """
+    st.markdown(
+        """
+        <style>
+        /* Set overall page background */
+        .main, .viewer, .block-container {
+            background-color: #F0FAFB !important; /* Light-blue/gray background */
+        }
+
+        /* Sidebar area styling */
+        section[data-testid="stSidebar"] .css-1d391kg {  /* Sidebar background */
+            background-color: #0A72C5 !important; /* Netgain primary color */
+        }
+        /* Sidebar text */
+        section[data-testid="stSidebar"] .css-wjbhl0 {
+            color: #ffffff !important;
+        }
+        /* Sidebar headers (like "Add/Update Single Lease") */
+        section[data-testid="stSidebar"] h1, 
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] label {
+            color: #ffffff !important;
+        }
+
+        /* Buttons */
+        .stButton > button {
+            background-color: #05AC9C !important; /* Netgain secondary teal */
+            color: #ffffff !important;
+            border-radius: 5px;
+            border: 1px solid #05AC9C !important;
+        }
+        .stButton > button:hover {
+            background-color: #039582 !important; /* Darken on hover */
+            border-color: #039582 !important;
+        }
+
+        /* Tabs (for the new tabs layout) */
+        .stTabs [data-baseweb="tab"] {
+            background-color: #0A72C5 !important;
+        }
+        .stTabs [data-baseweb="tab"] > button {
+            color: #ffffff !important;
+        }
+        /* Active tab highlight */
+        .stTabs [data-baseweb="tab"].css-1n54785.e19leucf3 > button {
+            background-color: #05AC9C !important;
+            color: #ffffff !important;
+        }
+
+        /* Titles and headers in main body */
+        h1, h2, h3, h4, h5, h6 {
+            color: #0A72C5 !important; /* Netgain primary */
+        }
+
+        /* Dataframe styling container */
+        .stDataFrame, .css-1aumxhk {
+            background-color: #ffffff !important; /* Keep tables white */
+            color: #333333 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+############################
+# 8. STREAMLIT APP (FOUR TABS)
 ############################
 def main():
+    # Set Streamlit page config (optional)
+    st.set_page_config(
+        page_title="ASC 842 LEASE MODULE - Netgain Style",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+
+    # Inject our custom Netgain styling
+    set_netgain_style()
+
     st.title("ASC 842 LEASE MODULE")
 
     # 1) Load existing leases from Google Sheets on first run
@@ -652,9 +734,9 @@ def main():
 
                 fig, ax = plt.subplots()
                 ax.pie(values, labels=labels, autopct="%1.1f%%", startangle=140)
-                ax.axis("equal")  # Circle shape
+                ax.axis("equal")  # Ensures pie chart is a circle
                 st.pyplot(fig)
+
 
 if __name__ == "__main__":
     main()
-
